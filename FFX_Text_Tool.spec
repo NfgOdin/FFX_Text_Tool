@@ -4,7 +4,7 @@ a = Analysis(
     ['FFX_Text_Tool.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('FFXTextTool.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

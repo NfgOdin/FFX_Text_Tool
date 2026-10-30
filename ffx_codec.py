@@ -20,6 +20,7 @@ FILE_RECORD_SIZES = {
     "help_txt.bin": 16, "item.bin": 92, "command.bin": 92, "monmagic1.bin": 92,
     "monmagic2.bin": 92, "important.bin": 20, "panel.bin": 16, "a_ability.bin": 16,
     "monster1.bin": 128, "monster2.bin": 128, "monster3.bin": 128,
+    "ply_save.bin": 148, "w_name.bin": 72, "ply_rom.bin": 44, "sphere.bin": 16,
 }
 
 class FFXCodec:
@@ -38,7 +39,9 @@ class FFXCodec:
             
         # Relative to script location
         script_dir = os.path.dirname(os.path.abspath(__file__))
+        search_paths.append(os.path.join(script_dir, "..", "VBF Browser", "Extracted", "ffx_ps2", "ffx", "master", "jppc", "ffx_encoding"))
         search_paths.append(os.path.join(script_dir, "..", "VBF Browser", "extracted", "ffx_ps2", "ffx", "master", "jppc", "ffx_encoding"))
+        search_paths.append(os.path.join(script_dir, "..", "..", "Misc Tools", "FF10 Rando", "input", "ffx_ps2", "ffx", "master", "jppc", "ffx_encoding"))
         search_paths.append(os.path.join(script_dir, "jppc", "ffx_encoding"))
         search_paths.append(os.path.join(script_dir, "ffx_encoding"))
         search_paths.append(script_dir)
@@ -176,13 +179,13 @@ class FFXCodec:
                         section = idx - 0x13
                         i += 1
                         if i >= len(bytes_subset): break
-                        line = bytes_subset[i] - 0x30
+                        line = bytes_subset[i]
                         out.append(f"{{MCR:s{section:02X}l{line:02X}}}")
                 elif 0x13 <= idx <= 0x22:
                     section = idx - 0x13
                     i += 1
                     if i >= len(bytes_subset): break
-                    line = bytes_subset[i] - 0x30
+                    line = bytes_subset[i]
                     out.append(f"{{MCR:s{section:02X}l{line:02X}}}")
                 elif idx == 0x23:
                     i += 1
@@ -243,7 +246,7 @@ class FFXCodec:
     def parse_command(self, cmd):
         if cmd == "PAUSE":
             return [0x01]
-        elif cmd == "\\n":
+        elif cmd in ("\\n", "\n", "n"):
             return [0x03]
         elif cmd == "CHOICE-END":
             return [0x10, 0xFF]
@@ -272,8 +275,15 @@ class FFXCodec:
             pc = int(cmd[3:], 16)
             return [0x13, pc + 0x30]
         elif cmd.startswith("MCR:") or cmd.startswith("MACRO:"):
-            section = int(cmd[5:7], 16) + 0x13
-            line = int(cmd[8:10], 16) + 0x30
+            # Support both {MCR:s00l01} and legacy {MCR:s00l-2F}
+            s_idx = cmd.index('s')
+            l_idx = cmd.index('l')
+            section = int(cmd[s_idx + 1 : l_idx], 16) + 0x13
+            l_str = cmd[l_idx + 1:]
+            if l_str.startswith("-"):
+                line = (int(l_str, 16) + 0x30) & 0xFF
+            else:
+                line = int(l_str, 16)
             return [section, line]
         elif cmd.startswith("KEY:"):
             key_item_idx = int(cmd[4:], 16)
@@ -363,7 +373,30 @@ class FFXCodec:
         
         record_count = max_idx - min_idx + 1
         records = []
-        
+        base_name = os.path.basename(filepath).lower()
+
+        # ply_save.bin stores ONLY the character name at 0:2 and name_key at 2:4;
+        # bytes 4..148 contain character starting HP, MP, stats, and equipment.
+        if ("ply_save" in base_name or record_length == 148):
+            for idx in range(record_count):
+                rec_offset = idx * record_length
+                rec_data = data_bytes[rec_offset : rec_offset + record_length]
+                name_off, name_key = struct.unpack("<HH", rec_data[0:4])
+                name = self.decode_ffx_bytes(string_bytes, name_off, charset)
+                records.append({
+                    "id": idx + min_idx,
+                    "name": name,
+                    "name_key": name_key,
+                    "sname": "",
+                    "sname_key": 0,
+                    "desc": "",
+                    "desc_key": 0,
+                    "sdesc": "",
+                    "sdesc_key": 0,
+                    "extra_bytes": rec_data[4:] # All 144 bytes preserved intact
+                })
+            return records, min_idx, max_idx, magic_part
+
         for idx in range(record_count):
             rec_offset = idx * record_length
             rec_data = data_bytes[rec_offset : rec_offset+record_length]
@@ -383,7 +416,7 @@ class FFXCodec:
             
             extra_bytes = rec_data[16:]
             
-            records.append({
+            rec_dict = {
                 "id": idx + min_idx,
                 "name": name,
                 "name_key": name_key,
@@ -394,7 +427,24 @@ class FFXCodec:
                 "sdesc": sdesc,
                 "sdesc_key": sdesc_key,
                 "extra_bytes": extra_bytes
-            })
+            }
+
+            # Extended support for w_name.bin (Party equipment names across 7 characters)
+            if record_length == 72 and len(rec_data) >= 72:
+                w_wakka_off, w_wakka_key = struct.unpack("<HH", rec_data[16:20])
+                w_lulu_off, w_lulu_key = struct.unpack("<HH", rec_data[20:24])
+                w_rikku_off, w_rikku_key = struct.unpack("<HH", rec_data[24:28])
+                rec_dict["w_wakka"] = self.decode_ffx_bytes(string_bytes, w_wakka_off, charset)
+                rec_dict["w_wakka_key"] = w_wakka_key
+                rec_dict["w_lulu"] = self.decode_ffx_bytes(string_bytes, w_lulu_off, charset)
+                rec_dict["w_lulu_key"] = w_lulu_key
+                rec_dict["w_rikku"] = self.decode_ffx_bytes(string_bytes, w_rikku_off, charset)
+                rec_dict["w_rikku_key"] = w_rikku_key
+                rec_dict["extra_bytes"] = rec_data[28:] # 44 bytes remaining (slots 7..13 + suffix pointers)
+                if idx == 0 and len(string_bytes) >= 16384:
+                    rec_dict["_w_name_tail_pool"] = bytes(string_bytes[16384:])
+
+            records.append(rec_dict)
             
         return records, min_idx, max_idx, magic_part
 
@@ -402,6 +452,16 @@ class FFXCodec:
         """
         Repacks and saves records back to a .bin file.
         """
+        base_name = os.path.basename(filepath).lower()
+
+        # Specialized repacker for w_name.bin to preserve internal character equipment suffix structures
+        if "w_name" in base_name or (records and "w_wakka" in records[0]):
+            return self._write_w_name_bin(filepath, records, min_idx, max_idx, magic_part, charset)
+
+        # Specialized repacker for ply_save.bin (148-byte records: 4-byte header for Name, 144 bytes stats)
+        if "ply_save" in base_name or (records and len(records[0].get("extra_bytes", b"")) == 144):
+            return self._write_ply_save_bin(filepath, records, min_idx, max_idx, magic_part, charset)
+
         # Encode all strings and prepare unique mappings
         refs = []
         for r in records:
@@ -420,6 +480,7 @@ class FFXCodec:
         
         unique_map = {}
         byte_list = []
+        rec_offsets = {id(r): {} for r in records}
         
         for ref_type, s, r in refs_sorted:
             if s in unique_map:
@@ -429,9 +490,7 @@ class FFXCodec:
                 unique_map[s] = offset
                 byte_list.extend(encoded_cache[s])
                 
-            r[ref_type + '_offset'] = offset
-            # Retain original keys to prevent crashes in the game's localized text engine
-            r[ref_type + '_key'] = r.get(ref_type + '_key', 0)
+            rec_offsets[id(r)][ref_type] = offset
             
         # Rebuild structured record bytes
         data_blocks = []
@@ -440,11 +499,12 @@ class FFXCodec:
             record_length = 16 + len(records[0]['extra_bytes'])
             
         for r in records:
+            offs = rec_offsets[id(r)]
             header_bytes = struct.pack("<HHHHHHHH",
-                r['name_offset'], r['name_key'],
-                r['sname_offset'], r['sname_key'],
-                r['desc_offset'], r['desc_key'],
-                r['sdesc_offset'], r['sdesc_key']
+                offs.get('name', 0), r.get('name_key', 0),
+                offs.get('sname', 0), r.get('sname_key', 0),
+                offs.get('desc', 0), r.get('desc_key', 0),
+                offs.get('sdesc', 0), r.get('sdesc_key', 0)
             )
             record_block = header_bytes + r['extra_bytes']
             data_blocks.append(record_block)
@@ -461,3 +521,367 @@ class FFXCodec:
             f.write(file_header + data_bytes + string_buffer)
             
         return len(file_header + data_bytes + string_buffer)
+
+    def _write_w_name_bin(self, filepath, records, min_idx, max_idx, magic_part, charset="us"):
+        """
+        Specialized repacker for w_name.bin (72-byte records) to preserve suffix and tail offset structures.
+        Main weapon/armor strings are kept within 0x0000..0x3FFF (0..16383), and the tail suffix pool
+        is anchored at 0x4000 (16384).
+        """
+        tail_bytes = b""
+        if records and "_w_name_tail_pool" in records[0]:
+            tail_bytes = records[0]["_w_name_tail_pool"]
+        elif os.path.exists(filepath):
+            with open(filepath, "rb") as f:
+                orig_raw = f.read()
+            if len(orig_raw) > 20:
+                tot_l = struct.unpack("<H", orig_raw[14:16])[0]
+                if 20 + tot_l + 16384 <= len(orig_raw):
+                    tail_bytes = orig_raw[20 + tot_l + 16384 :]
+
+        unique_map = {}
+        main_string_bytes = []
+
+        def get_off(s):
+            if s not in unique_map:
+                unique_map[s] = len(main_string_bytes)
+                main_string_bytes.extend(self.encode_ffx_string(s, charset))
+                main_string_bytes.append(0x00)
+            return unique_map[s]
+
+        hyphen_off = get_off("-")
+
+        out_data = bytearray()
+        for r in records:
+            extra_b = bytearray(r.get("extra_bytes", b"\x00" * 44))
+            if len(extra_b) < 44:
+                extra_b.extend(b"\x00" * (44 - len(extra_b)))
+            full_rec = bytearray(72)
+            # Slots 0..3 (Tidus, Yuna, Auron, Kimahri)
+            full_rec[0:4] = struct.pack("<HH", get_off(r["name"]), r.get("name_key", 0))
+            full_rec[4:8] = struct.pack("<HH", get_off(r["sname"]), r.get("sname_key", 0))
+            full_rec[8:12] = struct.pack("<HH", get_off(r["desc"]), r.get("desc_key", 0))
+            full_rec[12:16] = struct.pack("<HH", get_off(r["sdesc"]), r.get("sdesc_key", 0))
+            # Slots 4..6 (Wakka, Lulu, Rikku)
+            full_rec[16:20] = struct.pack("<HH", get_off(r.get("w_wakka", "")), r.get("w_wakka_key", 0))
+            full_rec[20:24] = struct.pack("<HH", get_off(r.get("w_lulu", "")), r.get("w_lulu_key", 0))
+            full_rec[24:28] = struct.pack("<HH", get_off(r.get("w_rikku", "")), r.get("w_rikku_key", 0))
+            # Copy remaining 44 bytes (slots 7..13, suffix pointers 56..70, flags 70..72)
+            full_rec[28:72] = extra_b[:44]
+            # Standardize slots 7..13 to hyphen offset while preserving key bytes
+            for s_idx in range(7, 14):
+                full_rec[s_idx * 4 : s_idx * 4 + 2] = struct.pack("<H", hyphen_off)
+            out_data.extend(full_rec)
+
+        if len(main_string_bytes) > 16384:
+            raise ValueError(f"Total weapon/armor name string pool ({len(main_string_bytes)} bytes) exceeds 16,384 byte limit for 0x4000 suffix alignment.")
+
+        padded_main = bytes(main_string_bytes) + b"\x00" * (16384 - len(main_string_bytes))
+        full_str_buf = padded_main + tail_bytes
+        file_hdr = magic_part + struct.pack("<HHHH", min_idx, max_idx, 72, len(out_data)) + struct.pack("<I", 20)
+
+        with open(filepath, "wb") as f:
+            f.write(file_hdr + bytes(out_data) + full_str_buf)
+
+        return len(file_hdr + bytes(out_data) + full_str_buf)
+
+    def _write_ply_save_bin(self, filepath, records, min_idx, max_idx, magic_part, charset="us"):
+        """
+        Specialized repacker for ply_save.bin (148-byte records: 4-byte header for Name, 144 bytes stats).
+        """
+        unique_map = {}
+        byte_list = []
+
+        def get_off(s):
+            if s not in unique_map:
+                unique_map[s] = len(byte_list)
+                byte_list.extend(self.encode_ffx_string(s, charset))
+                byte_list.append(0x00)
+            return unique_map[s]
+
+        out_data = bytearray()
+        for r in records:
+            extra_b = r.get("extra_bytes", b"\x00" * 144)
+            if len(extra_b) < 144:
+                extra_b = extra_b + b"\x00" * (144 - len(extra_b))
+            rec_hdr = struct.pack("<HH", get_off(r["name"]), r.get("name_key", 0))
+            out_data.extend(rec_hdr + extra_b)
+
+        tot_len = len(out_data)
+        file_hdr = magic_part + struct.pack("<HHHH", min_idx, max_idx, 148, tot_len) + struct.pack("<I", 20)
+
+        with open(filepath, "wb") as f:
+            f.write(file_hdr + bytes(out_data) + bytes(byte_list))
+
+        return len(file_hdr + bytes(out_data) + bytes(byte_list))
+
+    def read_ffx_sps2(self, filepath, charset="us"):
+        """
+        Reads an FFX .sps2 Screen Presentation / Script file (e.g. mon_boku.sps2, now_help.sps2).
+        Returns: records, min_id, max_id, magic_part
+        """
+        self.load_charset(charset)
+        with open(filepath, "rb") as f:
+            data = f.read()
+
+        if len(data) < 36:
+            raise ValueError(f"File '{filepath}' is too small to be a valid .sps2 file ({len(data)} bytes).")
+
+        hdr = struct.unpack("<5I", data[:20])
+        ptr_table_off = hdr[4]
+        if ptr_table_off >= len(data):
+            raise ValueError(f"Invalid pointer table offset {ptr_table_off} in .sps2 header.")
+
+        first_ptr = struct.unpack("<I", data[ptr_table_off : ptr_table_off + 4])[0]
+        if first_ptr < ptr_table_off or first_ptr > len(data):
+            raise ValueError(f"Invalid first string pointer {first_ptr} in .sps2 file.")
+
+        num_ptrs = (first_ptr - ptr_table_off) // 4
+        ptrs = [struct.unpack("<I", data[ptr_table_off + i * 4 : ptr_table_off + (i + 1) * 4])[0] for i in range(num_ptrs)]
+
+        records = []
+        for i in range(num_ptrs):
+            start = ptrs[i]
+            end = ptrs[i + 1] if i + 1 < num_ptrs else len(data)
+            chunk = data[start:end]
+            text = self.decode_ffx_bytes(chunk, 0, charset)
+            records.append({
+                "id": i,
+                "name": text,
+                "sname": "",
+                "desc": "",
+                "sdesc": "",
+                "raw_chunk": chunk,
+                "ptr": start
+            })
+
+        min_id = 0
+        max_id = max(0, len(records) - 1)
+        magic_part = data[:36]
+        return records, min_id, max_id, magic_part
+
+    def write_ffx_sps2(self, filepath, records, min_idx=0, max_idx=0, magic_part=None, charset="us"):
+        """
+        Repacks and saves records back to an .sps2 file.
+        Updates edited text entries while preserving raw presentation bytecode packets.
+        """
+        self.load_charset(charset)
+        repacked_chunks = []
+        for r in records:
+            raw_c = r.get("raw_chunk", b"")
+            orig_dec = self.decode_ffx_bytes(raw_c, 0, charset) if raw_c else ""
+            if r["name"] != orig_dec or not raw_c:
+                new_enc = bytes(self.encode_ffx_string(r["name"], charset) + [0x00])
+                repacked_chunks.append(new_enc)
+            else:
+                repacked_chunks.append(raw_c)
+
+        num_ptrs = len(records)
+        ptr_table_off = 36
+        new_first_ptr = ptr_table_off + num_ptrs * 4
+        new_ptrs = []
+        cur_off = new_first_ptr
+        for ch in repacked_chunks:
+            new_ptrs.append(cur_off)
+            cur_off += len(ch)
+
+        new_hdr = struct.pack("<5I", 1, 0, cur_off, 0, ptr_table_off) + b"\x00" * 16
+        out_bytes = new_hdr + b"".join(struct.pack("<I", p) for p in new_ptrs) + b"".join(repacked_chunks)
+
+        with open(filepath, "wb") as f:
+            f.write(out_bytes)
+
+        return len(out_bytes)
+
+    def read_albheddic_bin(self, filepath, charset="us"):
+        """
+        Reads the Al Bhed dictionary substitution table (menu/albheddic.bin).
+        Each entry is 4 bytes: [original_char, albhed_translated_char, primer_id, 0x00].
+        """
+        self.load_charset(charset)
+        tbl = self.byte_to_char_maps.get(charset, {})
+        with open(filepath, "rb") as f:
+            data = f.read()
+
+        num_entries = len(data) // 4
+        records = []
+        for i in range(num_entries):
+            b0, b1, b2, b3 = data[i * 4 : (i + 1) * 4]
+            c0 = tbl.get(b0, f"\\x{b0:02X}")
+            c1 = tbl.get(b1, f"\\x{b1:02X}")
+            primer_str = f"Al Bhed Primer {b2 + 1}"
+            records.append({
+                "id": i,
+                "name": f"{c0} -> {c1}",
+                "sname": c1,
+                "desc": f"Translates original letter '{c0}' into '{c1}' ({primer_str})",
+                "sdesc": primer_str,
+                "b0": b0,
+                "b1": b1,
+                "b2": b2,
+                "b3": b3
+            })
+        min_id = 0
+        max_id = max(0, len(records) - 1)
+        magic_part = b""
+        return records, min_id, max_id, magic_part
+
+    def write_albheddic_bin(self, filepath, records, min_idx=0, max_idx=0, magic_part=b"", charset="us"):
+        """
+        Repacks and saves the Al Bhed dictionary substitution table (menu/albheddic.bin).
+        """
+        self.load_charset(charset)
+        rev = self.char_to_byte_maps.get(charset, {})
+        out = bytearray()
+        for r in records:
+            b0 = r.get("b0", 0)
+            b1 = r.get("b1", 0)
+            nm = r.get("name", "")
+            if "->" in nm:
+                char_trans = nm.split("->")[1].strip()
+            else:
+                char_trans = nm.strip()
+            if char_trans in rev:
+                b1 = rev[char_trans]
+            out.extend([b0, b1, r.get("b2", 0), r.get("b3", 0)])
+
+        with open(filepath, "wb") as f:
+            f.write(out)
+        return len(out)
+
+    def read_ffx_msg_bin(self, filepath, charset="us"):
+        """
+        Reads an FFX Message Table .bin file (used by event/obj_ps3 cutscenes, battle/btl quotes, menu/menumain.bin, cloudsave).
+        Header contains a 32-bit pointer table from offset 0 up to first_ptr.
+        Returns: records, min_id, max_id, magic_part
+        """
+        self.load_charset(charset)
+        with open(filepath, "rb") as f:
+            data = f.read()
+
+        if len(data) < 4:
+            return [], 0, 0, b""
+
+        raw_first_ptr = struct.unpack("<I", data[:4])[0]
+        if raw_first_ptr == 0:
+            return [], 0, 0, b""
+
+        first_ptr = raw_first_ptr
+        if first_ptr > len(data):
+            p_24 = raw_first_ptr & 0x00FFFFFF
+            p_16 = raw_first_ptr & 0xFFFF
+            if 4 <= p_24 <= len(data):
+                first_ptr = p_24
+            elif 4 <= p_16 <= len(data):
+                first_ptr = p_16
+            else:
+                raise ValueError(f"Invalid first string pointer {raw_first_ptr} in message file.")
+
+        num_ptrs = first_ptr // 4
+        ptrs = [struct.unpack("<I", data[i * 4 : (i + 1) * 4])[0] for i in range(num_ptrs)]
+
+        records = []
+        for i, raw_p in enumerate(ptrs):
+            p_val = raw_p
+            if p_val > len(data):
+                p_24 = raw_p & 0x00FFFFFF
+                p_16 = raw_p & 0xFFFF
+                if p_24 < len(data):
+                    p_val = p_24
+                elif p_16 < len(data):
+                    p_val = p_16
+
+            if 0 < p_val < len(data):
+                text = self.decode_ffx_bytes(data, p_val, charset)
+            else:
+                text = ""
+
+            high_flags = 0
+            if (raw_p & 0xFF000000) != 0 and (raw_p & 0x00FFFFFF) < len(data):
+                high_flags = raw_p & 0xFF000000
+            elif (raw_p & 0xFFFF0000) != 0 and (raw_p & 0xFFFF) < len(data):
+                high_flags = raw_p & 0xFFFF0000
+
+            records.append({
+                "id": i,
+                "name": text,
+                "sname": "",
+                "desc": "",
+                "sdesc": "",
+                "ptr": p_val,
+                "high_flags": high_flags
+            })
+
+        min_id = 0
+        max_id = max(0, len(records) - 1)
+        magic_part = b""
+        return records, min_id, max_id, magic_part
+
+    def write_ffx_msg_bin(self, filepath, records, min_idx=0, max_idx=0, magic_part=b"", charset="us"):
+        """
+        Repacks and saves records back to an FFX Message Table .bin file.
+        Rebuilds the 32-bit pointer table and deduplicated string pool.
+        """
+        self.load_charset(charset)
+        str_to_pool_off = {}
+        pool_bytes = []
+        new_ptrs = []
+
+        new_first_ptr = len(records) * 4
+        for r in records:
+            s = r["name"]
+            if s not in str_to_pool_off:
+                str_to_pool_off[s] = len(pool_bytes)
+                pool_bytes.extend(self.encode_ffx_string(s, charset) + [0x00])
+            offset = new_first_ptr + str_to_pool_off[s]
+            high_flags = r.get("high_flags", 0)
+            new_ptrs.append(offset | high_flags)
+
+        out_data = bytearray()
+        for p in new_ptrs:
+            out_data.extend(struct.pack("<I", p))
+        out_data.extend(bytes(pool_bytes))
+
+        with open(filepath, "wb") as f:
+            f.write(out_data)
+
+        return len(out_data)
+
+    def load_any_ffx_file(self, filepath, record_len=16, charset="us"):
+        """
+        Unified loader that detects whether a file is:
+        - SPS2 Presentation package (.sps2)
+        - Fixed-record Kernel Table (.bin in battle/kernel)
+        - Al Bhed Cipher Dictionary (menu/albheddic.bin)
+        - Message Table (.bin in event, battle/btl, menu, cloudsave)
+        """
+        norm_path = filepath.replace("\\", "/").lower()
+        base_name = os.path.basename(norm_path)
+        if norm_path.endswith(".sps2"):
+            records, min_id, max_id, magic_part = self.read_ffx_sps2(filepath, charset)
+            return records, min_id, max_id, magic_part, "sps2"
+        elif "albheddic" in base_name:
+            records, min_id, max_id, magic_part = self.read_albheddic_bin(filepath, charset)
+            return records, min_id, max_id, magic_part, "albhed"
+        elif "battle/kernel" in norm_path or base_name in FILE_RECORD_SIZES or "w_name" in base_name:
+            rec_len = FILE_RECORD_SIZES.get(base_name, record_len)
+            records, min_id, max_id, magic_part = self.read_ffx_text_bin(filepath, rec_len, charset)
+            return records, min_id, max_id, magic_part, "kernel"
+        else:
+            records, min_id, max_id, magic_part = self.read_ffx_msg_bin(filepath, charset)
+            return records, min_id, max_id, magic_part, "msg"
+
+    def save_any_ffx_file(self, filepath, records, min_idx, max_idx, magic_part, charset="us"):
+        """
+        Unified saver that routes saving to the appropriate repacker.
+        """
+        norm_path = filepath.replace("\\", "/").lower()
+        base_name = os.path.basename(norm_path)
+        if norm_path.endswith(".sps2"):
+            return self.write_ffx_sps2(filepath, records, min_idx, max_idx, magic_part, charset)
+        elif "albheddic" in base_name:
+            return self.write_albheddic_bin(filepath, records, min_idx, max_idx, magic_part, charset)
+        elif "battle/kernel" in norm_path or base_name in FILE_RECORD_SIZES or "w_name" in base_name:
+            return self.write_ffx_text_bin(filepath, records, min_idx, max_idx, magic_part, charset)
+        else:
+            return self.write_ffx_msg_bin(filepath, records, min_idx, max_idx, magic_part, charset)
