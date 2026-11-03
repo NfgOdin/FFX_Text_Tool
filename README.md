@@ -1,35 +1,71 @@
-# Final Fantasy X Text & Dialogue Editor (FFX Text Tool)
+# Final Fantasy X & X-2 Text & Localization Studio (v2.0.0)
 
-A modern desktop GUI utility designed to view, decode, edit, and repack text and dialogue binary tables (e.g., `item_txt.bin`, `arms_txt.bin`, `status_txt.bin`, `summon_txt.bin`, `menu_txt.bin`, `mmain_txt.bin`, `monster1.bin`, `monster2.bin`, `monster3.bin`, etc.) from *Final Fantasy X*.
+A comprehensive professional localization and text modding suite designed to view, decode, edit, audit, translate, and repack all text and dialogue binary tables from both **Final Fantasy X** and **Final Fantasy X-2 HD Remaster**.
 
 [![Repository](https://img.shields.io/badge/GitHub-FFX__Text__Tool-blue?logo=github)](https://github.com/NfgOdin/FFX_Text_Tool)
+[![Version](https://img.shields.io/badge/Version-2.0.0-emerald)](#release-changelog)
 
 ---
 
-## Features
+## Key Pillars & Features
 
-- **Comprehensive Game-Wide Text Support**: View, edit, translate, and repack all text across the entire game categorized into 5 dedicated workspaces:
-  - ⚔️ **Battle Kernel Tables (`battle/kernel`)**: `item_txt.bin`, `arms_txt.bin`, `status_txt.bin`, `summon_txt.bin`, `menu_txt.bin`, `mmain_txt.bin`, `config_txt.bin`, `name_txt.bin`, `save_txt.bin`, `btlend_txt.bin`, `btl_txt.bin`, `build_txt.bin`, `help_txt.bin`, `panel.bin`, `a_ability.bin`, `important.bin`, `monster1.bin`, `monster2.bin`, `monster3.bin`, `w_name.bin`, `ply_save.bin`, `ply_rom.bin`, `sphere.bin`.
-  - 🏟️ **Monster Arena & Help Tutorials (`help`)**: Screen Presentation Script tables (`mon_boku.sps2` containing all Monster Arena trainer dialogue, creation titles, and fiend categories; `now_help.sps2`, `s_monitor.sps2`, `dvdcopy.sps2`).
-  - 📜 **Story & Cutscene Dialogue (`event/obj_ps3`)**: All 636 localized story cutscene and NPC field dialogue files across all game locations (Besaid, Kilika, Luca, Mi'ihen, Thunder Plains, Bikanel, Macalania, Zanarkand, etc.).
-  - 🎙️ **In-Battle Dialogue & Quotes (`battle/btl`)**: All 164 in-battle character conversation files, tactical boss cues, and victory quotes.
-  - ⚙️ **Menu & System Text (`menu`, `cloudsave`)**: In-game menu tutorials (`menumain.bin`), cloud save messages (`cloud.bin`, `cloudv.bin`), and system strings.
-- **Custom FFX Character Encoding**: Decodes and encodes text using FFX's proprietary translation mappings (`ffxsjistbl_us.bin`, `ffxsjistbl_jp.bin`, `ffxsjistbl_it.bin`, `ffxsjistbl_gr.bin`, `ffxsjistbl_fr.bin`, `ffxsjistbl_sp.bin`).
-- **Control Codes Support**: Full decoding and reconstruction of in-game control codes, including:
-  - Colors (`{CLR:YELLOW}`, `{CLR:RED}`, `{CLR:OL_CYAN}`, etc.)
-  - Timing & formatting (`{PAUSE}`, `{SPACE:XX}`, `{TIME:XX}`)
-  - Variables, buttons & icons (`{VAR:XX}`, `{KEY:XX}`, `{PC:XX}`, `{MCR:sXXlYY}`)
-  - Choices and line breaks (`{CHOICE:XX}`, `{CHOICE-END}`, `\n`)
-- **Single-Row CSV Export / Import (`{\n}`)**: Single-file or batch category export and import to CSV. Line breaks are automatically converted to `{\n}` placeholders so every entry stays strictly on a single row, preventing broken multiline rows in Excel/spreadsheet translation software.
-- **Global Search & Replace**: Batch find and replace terms across the active file, the current category, or all files in the active localization.
-- **Safe Repacking**: Built-in binary repacking with pointer reconstruction, string deduplication, and safeguards for 16-bit offset kernel limits.
-- **Built-in Backups**: Automatically creates a `.bak` backup copy of the target file before any saving operations.
-- **Damage Formula Editor**: Interactive editing with human-readable damage formulas (e.g., `STR vs DEF`, `Celestial HP-based`, `MAG ignore MDF`) mapped directly to their hex codes.
-- **Modern Dark UI**: A responsive, clean dark-theme user interface built with Python's Tkinter.
+- **Dual-Engine Game Support (FFX & FFX-2)**:
+  - Seamlessly toggle between **Final Fantasy X** and **Final Fantasy X-2 HD Remaster** with 1 click.
+  - Dynamic game-aware UI theme switching: **Sin Blue** (`#3b82f6`) for FFX vs **Celsius Purple** (`#a855f7`) for FFX-2.
+  - Dedicated support for FFX-2 extended kernel tables (`acc.bin`, `accessory.bin`, `dress.bin`, `monmagic.bin`, etc.) and dressphere party equipment slots (Yuna Gunner, Rikku Thief, Paine Warrior, plus creature slots).
+- **Interactive Choice Simulator & Live Preview**:
+  - Real-time in-game dialogue simulator rendering line-by-line formatting, custom colors, and speaker nameplates.
+  - **Interactive Choice Navigation**: Navigate multi-option dialogue prompts (`{CHOICE:XX}`) with keyboard $\uparrow/\downarrow$ arrow keys, simulated auto-indentation, and an animated blinking cursor.
+- **Dynamic Translation Memory & Multilingual Canonical Lore Glossary**:
+  - Over 137 verified canonical glossary terms indexed across 6 languages (English, Japanese, German, French, Italian, Spanish).
+  - Proactive translation suggestion banner above the editor with `Ctrl+T` / 1-click auto-insertion.
+  - Searchable Lore Glossary browser and Translation Dashboard.
+- **QA Syntax & Crash Prevention Auditor**:
+  - Deep-scanning syntax validator detecting unclosed brackets, invalid color codes, missing resets, line overflows ($>43$ chars per line), and 16-bit offset pool overflow risks.
+  - **1-Click Safe Auto-Fix**: Automatically repair formatting errors across the current file, category, or entire localization with `.bak` safety backups.
+  - **Cutscene VO Timing Estimator**: Calculates display duration, Characters Per Second (CPS), and Words Per Minute (WPM) based on `{TIME:XX}` engine delays to assist cutscene voice dubbing.
+- **Reusable Batch Replacement Ruleset Manager**:
+  - Create, save, load, and execute JSON regex/text replacement pipelines across single files, categories, or the entire localization tree.
+- **1-Click Mod Packager (Spira Mod Manager & Nexus Mods)**:
+  - Generate release-ready mod archives (`.zip`) with automatically structured `manifest.json` metadata compatible with Spira Mod Manager and Nexus Mods.
+  - Dynamic game path routing (`ffx_ps2/ffx/master` vs `ffx_ps2/ffx2/master`).
+- **Visual Side-by-Side Diff Viewer**:
+  - Compare edited files directly against original or reference localizations with color-coded additions, deletions, and modifications.
+- **Data Safety, Recent Files & Editing Polish**:
+  - **Exit & Navigation Protection**: Prompts with `Yes / No / Cancel` on unsaved changes before switching rows, loading files, or exiting (`WM_DELETE_WINDOW`).
+  - **Recent Files Menu**: Native `File -> Recent Files` dynamic cascade with universal category path resolution.
+  - **Rich Context Menu**: Right-click editing menu (Cut, Copy, Paste, Delete, Select All, Lore TM, and control tag wrapping).
+  - **Standalone Bundled Encodings**: Packaged with all official character encoding tables (`us`, `jp`, `ch`, `cn`, `kr`) for zero external dependencies.
 
 ---
 
 ## Release Changelog
+
+### v2.0.0 (The Studio Edition)
+- **Full Dual-Engine Support (FFX & FFX-2)**:
+  - Complete support for Final Fantasy X and Final Fantasy X-2 HD Remaster text assets.
+  - Adaptive visual themes: *Sin Blue* for FFX and *Celsius Purple* for FFX-2.
+  - Added FFX-2 tables (`acc.bin`, `accessory.bin`, `dress.bin`, `monmagic.bin`, etc.) and party equipment mappings.
+- **Interactive Choice Simulator**:
+  - Live interactive choice box simulator with animated blinking cursor, keyboard navigation ($\uparrow/\downarrow$), and accurate in-game line indentation.
+- **Translation Memory & Canonical Lore Glossary**:
+  - Proactive Lore TM suggestion engine with `Ctrl+T` insertion.
+  - 137 verified canonical terms across English, Japanese, German, French, Italian, and Spanish.
+- **QA Syntax & Crash Prevention Auditor**:
+  - Complete error detection for unclosed control tags, invalid color codes, and line overflows ($>43$ chars).
+  - 1-click batch safe auto-fix for active memory and disk files with automatic `.bak` backups.
+  - Cutscene Voice-Over (VO) timing and speech-rate estimator (CPS / WPM).
+- **Reusable Batch Replacement Ruleset Manager**:
+  - Save, load, and run persistent JSON replacement pipelines across files and localizations.
+- **1-Click Mod Packager**:
+  - Export structured `.zip` mod packages with Spira Mod Manager `manifest.json` and Nexus Mods compatibility.
+- **Visual Side-by-Side Diff Dialog**:
+  - Interactive comparison tool with color-coded diffs, filter by changes, and `Alt+Left` / `Alt+Right` entry navigation.
+- **Desktop Polish & Data Safety**:
+  - `WM_DELETE_WINDOW` unsaved-changes protection on exit, file switch, and row navigation.
+  - Native `File -> Recent Files` menu cascade with multi-category path resolution.
+  - Right-click context menus with tag wrapping and Lore TM insertion across all text widgets.
+  - Bundled character encoding tables into standalone PyInstaller executable.
 
 ### v1.2.0 (The Ultimate Text & Dialogue Update)
 - **Modern Sleek Slate Dark Theme & Modernized UI**:

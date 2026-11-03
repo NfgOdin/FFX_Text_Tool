@@ -1,4 +1,5 @@
 import os
+import sys
 import struct
 
 COLOR_MAP = {
@@ -21,6 +22,8 @@ FILE_RECORD_SIZES = {
     "monmagic2.bin": 92, "important.bin": 20, "panel.bin": 16, "a_ability.bin": 16,
     "monster1.bin": 128, "monster2.bin": 128, "monster3.bin": 128,
     "ply_save.bin": 148, "w_name.bin": 72, "ply_rom.bin": 44, "sphere.bin": 16,
+    # FFX-2 Extended Tables
+    "acc.bin": 16, "accessory.bin": 16, "dress.bin": 16, "monmagic.bin": 92,
 }
 
 class FFXCodec:
@@ -33,6 +36,9 @@ class FFXCodec:
     def find_charset_file(self, charset):
         # List of potential paths to look for ffxsjistbl_*.bin
         search_paths = []
+        if hasattr(sys, "_MEIPASS"):
+            search_paths.append(os.path.join(sys._MEIPASS, "ffx_encoding"))
+            search_paths.append(sys._MEIPASS)
         if self.ffx_master_path:
             search_paths.append(os.path.join(self.ffx_master_path, "jppc", "ffx_encoding"))
             search_paths.append(os.path.join(self.ffx_master_path, "ffx_encoding"))
@@ -857,7 +863,24 @@ class FFXCodec:
         """
         norm_path = filepath.replace("\\", "/").lower()
         base_name = os.path.basename(norm_path)
-        if norm_path.endswith(".sps2"):
+        if "macrodic" in base_name or norm_path.endswith(".dcp"):
+            raw_macros = self.read_macrodic_dcp(filepath, charset)
+            records = []
+            for k, m in sorted(raw_macros.items(), key=lambda x: (x[1]['sec_id'], x[1]['item_id'])):
+                records.append({
+                    'id': f"s{m['sec_id']:02X}l{m['item_id']:02X}",
+                    'name': m['text'],
+                    'sname': m['tag'],
+                    'desc': m['category'],
+                    'sdesc': f"Section {m['sec_id']}, Item {m['item_id']}",
+                    'sec_id': m['sec_id'],
+                    'item_id': m['item_id'],
+                    'tag': m['tag']
+                })
+            min_idx = 0
+            max_idx = len(records) - 1 if records else 0
+            return records, min_idx, max_idx, b"", "macro"
+        elif norm_path.endswith(".sps2"):
             records, min_id, max_id, magic_part = self.read_ffx_sps2(filepath, charset)
             return records, min_id, max_id, magic_part, "sps2"
         elif "albheddic" in base_name:
@@ -877,7 +900,18 @@ class FFXCodec:
         """
         norm_path = filepath.replace("\\", "/").lower()
         base_name = os.path.basename(norm_path)
-        if norm_path.endswith(".sps2"):
+        if "macrodic" in base_name or norm_path.endswith(".dcp"):
+            macro_dict = {}
+            for r in records:
+                k = str(r.get('id', '')).lower()
+                macro_dict[k] = {
+                    'sec_id': r.get('sec_id', 0),
+                    'item_id': r.get('item_id', 0),
+                    'text': r.get('name', ''),
+                    'tag': r.get('tag', f"{{MCR:{k}}}")
+                }
+            return self.write_macrodic_dcp(filepath, macro_dict, charset)
+        elif norm_path.endswith(".sps2"):
             return self.write_ffx_sps2(filepath, records, min_idx, max_idx, magic_part, charset)
         elif "albheddic" in base_name:
             return self.write_albheddic_bin(filepath, records, min_idx, max_idx, magic_part, charset)
@@ -885,3 +919,137 @@ class FFXCodec:
             return self.write_ffx_text_bin(filepath, records, min_idx, max_idx, magic_part, charset)
         else:
             return self.write_ffx_msg_bin(filepath, records, min_idx, max_idx, magic_part, charset)
+
+    def read_macrodic_dcp(self, filepath, charset="us"):
+        """
+        Parses macrodic.dcp binary file across all sections and extracts macro definitions.
+        Returns a dictionary mapping tag keys (e.g. 's06l7d') to dicts:
+        {'tag': '{MCR:s06l7D}', 'sec_id': 6, 'item_id': 125, 'category': 'Characters & NPCs', 'text': 'Yevon'}
+        """
+        if not os.path.exists(filepath):
+            return {}
+        try:
+            with open(filepath, "rb") as f:
+                data = f.read()
+            if len(data) < 64:
+                return {}
+            hdr = struct.unpack('<16I', data[:64])
+            sec_cats = {
+                0x06: 'Characters & NPCs',
+                0x07: 'Blitzball Players',
+                0x08: 'Blitzball Techniques',
+                0x0B: 'Field & Map Locations',
+                0x0D: 'World Regions & Places'
+            }
+            macro_dict = {}
+            for sec_idx, sec_off in enumerate(hdr):
+                if sec_off == 0 or sec_off >= len(data):
+                    continue
+                # Determine pointer table size by finding the first valid string pointer
+                count = 0
+                for probe in range(sec_off, min(sec_off + 4096, len(data) - 1), 2):
+                    ptr_val = struct.unpack('<H', data[probe:probe+2])[0]
+                    if ptr_val > 0 and ptr_val <= len(data) - sec_off:
+                        count = ptr_val // 2
+                        break
+                if count <= 0:
+                    continue
+                cat = sec_cats.get(sec_idx, f'Section {sec_idx:02X}')
+                for item_idx in range(count):
+                    ptr_pos = sec_off + item_idx * 2
+                    if ptr_pos + 2 > len(data):
+                        break
+                    ptr = struct.unpack('<H', data[ptr_pos:ptr_pos+2])[0]
+                    if ptr == 0:
+                        continue
+                    str_off = sec_off + ptr
+                    if str_off >= len(data):
+                        continue
+                    txt = self.decode_ffx_bytes(data, str_off, charset)
+                    if txt and txt not in ('noname', 'None'):
+                        tag_key = f"s{sec_idx:02x}l{item_idx:02x}".lower()
+                        macro_dict[tag_key] = {
+                            'tag': f"{{MCR:s{sec_idx:02X}l{item_idx:02X}}}",
+                            'sec_id': sec_idx,
+                            'item_id': item_idx,
+                            'category': cat,
+                            'text': txt
+                        }
+            return macro_dict
+        except Exception:
+            return {}
+
+    def write_macrodic_dcp(self, filepath, macro_dict, charset="us"):
+        """
+        Packs a dictionary of macro definitions into a valid FFX macrodic.dcp binary file.
+        Accepts macro_dict in format {tag_key: {'sec_id': int, 'item_id': int, 'text': str, ...}} or {'s06l7d': 'Text'}.
+        """
+        try:
+            sections = {}
+            for k, val in macro_dict.items():
+                if isinstance(val, dict):
+                    sec_id = int(val.get('sec_id', 0))
+                    item_id = int(val.get('item_id', 0))
+                    text = str(val.get('text', ''))
+                else:
+                    m = re.match(r's([0-9a-fA-F]{2})l([0-9a-fA-F]{2})', k)
+                    if m:
+                        sec_id = int(m.group(1), 16)
+                        item_id = int(m.group(2), 16)
+                    else:
+                        continue
+                    text = str(val)
+                if sec_id not in sections:
+                    sections[sec_id] = {}
+                sections[sec_id][item_id] = text
+
+            hdr_offsets = [0] * 16
+            curr_offset = 64
+            section_bytes = {}
+
+            for s in range(16):
+                if s not in sections or not sections[s]:
+                    continue
+                items = sections[s]
+                max_id = max(items.keys())
+                count = max_id + 1
+
+                ptr_table_size = count * 2
+                str_data = bytearray()
+                ptrs = [0] * count
+
+                # Anchor ptrs[0] to the start of the string table for compatibility
+                ptrs[0] = ptr_table_size
+                str_data.extend(b'\x00')
+
+                for item_idx in range(count):
+                    if item_idx in items and items[item_idx]:
+                        t = items[item_idx]
+                        encoded = bytes(self.encode_ffx_string(t, charset)) + b'\x00'
+                        ptrs[item_idx] = ptr_table_size + len(str_data)
+                        str_data.extend(encoded)
+
+                sec_body = bytearray()
+                for p in ptrs:
+                    sec_body.extend(struct.pack('<H', p))
+                sec_body.extend(str_data)
+                while len(sec_body) % 4 != 0:
+                    sec_body.append(0)
+
+                hdr_offsets[s] = curr_offset
+                section_bytes[s] = sec_body
+                curr_offset += len(sec_body)
+
+            out_buf = bytearray()
+            for off in hdr_offsets:
+                out_buf.extend(struct.pack('<I', off))
+            for s in range(16):
+                if s in section_bytes:
+                    out_buf.extend(section_bytes[s])
+
+            os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+            with open(filepath, "wb") as f:
+                f.write(out_buf)
+            return len(out_buf)
+        except Exception:
+            return 0
